@@ -1,0 +1,23 @@
+name: TownyEconomyLaw
+version: 1.0.0
+main: dev.townyeconomylaw.TownyEconomyLaw
+api-version: '1.21.11'
+depend: [Towny, Vault]
+softdepend: [QuickShop, QuickShop-Hikari]
+commands:
+  tel:
+    aliases: [townyeconomylaw]
+    description: 経済・司法メニュー
+    usage: /tel
+    permission: townyeconomylaw.use
+  shopaverage:
+    aliases: [shopavg]
+    description: 現ワールドのショップ平均価格をカテゴリ別に閲覧
+    usage: /shopaverage [hand]
+    permission: townyeconomylaw.use
+permissions:
+  townyeconomylaw.use:
+    default: true
+  townyeconomylaw.jail.override:
+    description: 管理者による緊急釈放
+    default: op
