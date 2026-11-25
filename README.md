@@ -1,4 +1,4 @@
-# TownyEconomyLaw
+# TownyEconomyLaw / Towny Revolution
 
 Minecraft **Purpur 1.21.11 / Java 21** 向けの経済・司法プラグインです。
 
