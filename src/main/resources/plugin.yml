@@ -10,6 +10,22 @@ commands:
     description: 経済・司法メニュー
     usage: /tel
     permission: townyeconomylaw.use
+  company:
+    description: 企業・ロット・鉄道の運営
+    usage: /company help
+    permission: townyeconomylaw.use
+  corporation:
+    description: 法人・ロット・鉄道の運営
+    usage: /corporation help
+    permission: townyeconomylaw.use
+  election:
+    description: 所属国の選挙・投票 GUI
+    usage: /election GUI
+    permission: townyeconomylaw.use
+  request:
+    description: パスポート・ビザを申請
+    usage: /request <passport|visa|status>
+    permission: townyeconomylaw.use
   shopaverage:
     aliases: [shopavg]
     description: 現ワールドのショップ平均価格をカテゴリ別に閲覧

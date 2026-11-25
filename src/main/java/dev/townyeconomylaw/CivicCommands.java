@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
-import java.util.regex.Pattern;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 
@@ -14,23 +13,41 @@ import static dev.townyeconomylaw.Input.value;
 import static dev.townyeconomylaw.State.require;
 
 final class CivicCommands {
-    private static final Pattern ARGUMENT = Pattern.compile("\"([^\"]*)\"|([^\\s\"]+)");
     private final Civics civics;
     private final Government government;
     private final Territory territory;
     private final CivicMenu menu;
+    private final ElectionMenu electionMenu;
+    private final PartyFinance partyFinance;
+    private final Diplomacy diplomacy;
 
-    CivicCommands(Civics civics, Government government, Territory territory, CivicMenu menu) {
+    CivicCommands(Civics civics, Government government, Territory territory, CivicMenu menu,
+                  ElectionMenu electionMenu, PartyFinance partyFinance, Diplomacy diplomacy) {
         this.civics = civics;
         this.government = government;
         this.territory = territory;
         this.menu = menu;
+        this.electionMenu = electionMenu;
+        this.partyFinance = partyFinance;
+        this.diplomacy = diplomacy;
     }
 
     void nation(Player player, String[] input) {
-        List<String> args = arguments(input);
-        switch (action(args, 1)) {
-            case "set" -> civics.setSystem(player, action(args, 2), argument(args, 3));
+        List<String> args = Input.arguments(input);
+        String operation = action(args, 1);
+        switch (operation) {
+            case "set" -> {
+                String system = action(args, 2);
+                if (system.equals("pfpp")) partyFinance.setGrant(player, Input.cents(argument(args, 3), 0, Input.MAX_CASH));
+                else civics.setSystem(player, system, argument(args, 3));
+            }
+            case "passport", "visa", "tariffs", "fta", "border" -> diplomacy.nation(player, input);
+            case "impeachment", "no_confidence" -> {
+                require(action(args, 2).equals("start"),
+                    "使い方 /tel nation <impeachment|no_confidence> start <後任のMCID> [理由]");
+                String reason = args.size() > 4 ? limited(String.join(" ", args.subList(4, args.size())), 240) : "";
+                civics.removalMotion(player, knownPlayer(argument(args, 3)), operation.equals("impeachment"), reason);
+            }
             case "constitution" -> document(player, Civics.Document.CONSTITUTION, args);
             case "law" -> document(player, Civics.Document.LAW, args);
             case "election" -> election(player, args);
@@ -43,12 +60,12 @@ final class CivicCommands {
                     default -> throw new State.Rejected("使い方 /tel nation puppet <join|rebel|release|status>");
                 }
             }
-            default -> throw new State.Rejected("使い方 /tel nation <set|constitution|law|election|puppet>");
+            default -> throw new State.Rejected("使い方 /tel nation <set|constitution|law|election|impeachment|no_confidence|passport|visa|tariffs|fta|border|puppet>");
         }
     }
 
     void town(Player player, String[] input) {
-        List<String> args = arguments(input);
+        List<String> args = Input.arguments(input);
         require(action(args, 1).equals("regulations"), "使い方 /tel town regulations <add|remove|edit>");
         document(player, Civics.Document.REGULATION, args);
     }
@@ -67,7 +84,7 @@ final class CivicCommands {
     }
 
     void plot(Player player, String[] input) {
-        List<String> args = arguments(input);
+        List<String> args = Input.arguments(input);
         String operation = action(args, 1);
         if (operation.equals("set")) {
             Government.Plot type = switch (action(args, 2)) {
@@ -108,7 +125,7 @@ final class CivicCommands {
     }
 
     void party(Player player, String[] input) {
-        List<String> args = arguments(input);
+        List<String> args = Input.arguments(input);
         switch (action(args, 1)) {
             case "gui" -> menu.open(player, "政党", civics.parties(player).stream()
                 .map(party -> new CivicMenu.Row(Material.PAPER, party.name() + " [" + party.code() + "]",
@@ -126,7 +143,12 @@ final class CivicCommands {
             case "remove", "join" -> civics.partyAction(player, action(args, 1), argument(args, 2));
             case "add" -> civics.invite(player, knownPlayer(argument(args, 2)).getUniqueId());
             case "leave" -> civics.leaveParty(player);
-            default -> throw new State.Rejected("使い方 /tel political_party <create|remove|join|add|leave|GUI>");
+            case "bank" -> partyFinance.bank(player);
+            case "deposit" -> partyFinance.deposit(player, Input.cents(argument(args, 2), 1, Input.MAX_CASH));
+            case "withdrawal" -> partyFinance.withdrawal(player, Input.cents(argument(args, 2), 1, Input.MAX_CASH));
+            case "history" -> partyFinance.history(player, args.size() > 2 ? number(argument(args, 2), 1, 50) : 10);
+            case "grant" -> partyFinance.grant(player);
+            default -> throw new State.Rejected("使い方 /tel political_party <create|remove|join|add|leave|GUI|bank|deposit|withdrawal|history|grant>");
         }
     }
 
@@ -161,6 +183,7 @@ final class CivicCommands {
 
     private void election(Player player, List<String> args) {
         switch (action(args, 2)) {
+            case "gui" -> electionMenu.open(player);
             case "start" -> civics.election(player, number(argument(args, 3), 1, 365), argument(args, 4),
                 limited(String.join(" ", args.subList(5, args.size())), 300));
             case "list" -> civics.elections(player, null);
@@ -197,18 +220,5 @@ final class CivicCommands {
         return args.get(index);
     }
 
-    private List<String> arguments(String[] input) {
-        String joined = String.join(" ", input);
-        var matcher = ARGUMENT.matcher(joined);
-        ArrayList<String> result = new ArrayList<>();
-        int previous = 0;
-        while (matcher.find()) {
-            require((previous == 0 || matcher.start() > previous) && joined.substring(previous, matcher.start()).isBlank(),
-                "空白を含む引数は二重引用符で囲んでください。");
-            result.add(matcher.group(1) != null ? matcher.group(1) : matcher.group(2));
-            previous = matcher.end();
-        }
-        require(joined.substring(previous).isBlank(), "二重引用符を閉じてください。");
-        return result;
-    }
+
 }

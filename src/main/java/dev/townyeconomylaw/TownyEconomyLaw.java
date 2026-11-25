@@ -31,6 +31,12 @@ public class TownyEconomyLaw extends JavaPlugin {
     private ShopMenu shopMenu;
     private Civics civics;
     private CivicCommands civicCommands;
+    private EnterpriseCommands enterpriseCommands;
+    private StationRails stationRails;
+    private MinecartCouplers couplers;
+    private TransitRecipes transitRecipes;
+    private Diplomacy diplomacy;
+    private ElectionMenu electionMenu;
 
     @Override
     public void onEnable() {
@@ -40,14 +46,36 @@ public class TownyEconomyLaw extends JavaPlugin {
             api = new Integrations();
             market = new Market(state, api);
             banks = new Banks(state, api);
-            auctions = new Auctions(state, api);
             government = new Government(state, api);
+            diplomacy = new Diplomacy(state, api, government);
+            auctions = new Auctions(state, api, diplomacy);
+            getServer().getPluginManager().registerEvents(diplomacy, this);
             jail = new JailGuard(government);
+            Enterprises firms = new Enterprises(state, api);
+            EnterpriseLots lots = new EnterpriseLots(state, api, firms);
+            Transit transit = new Transit(this, state, api, firms, lots);
+            TransitMenu transitMenu = new TransitMenu(this, government, transit);
+            TransitGates gates = new TransitGates(this, state, government, firms, lots, transit);
+            couplers = new MinecartCouplers(this, government, api);
+            transitRecipes = new TransitRecipes(this, couplers);
+            transitRecipes.register();
+            stationRails = new StationRails(state, lots, firms, couplers);
+            couplers.setHeldCheck(stationRails::held);
+            EnterpriseLoans loans = new EnterpriseLoans(state, api, firms);
+            enterpriseCommands = new EnterpriseCommands(firms, lots, transit, transitMenu, gates, stationRails, loans);
+            getServer().getPluginManager().registerEvents(transitMenu, this);
+            getServer().getPluginManager().registerEvents(gates, this);
+            getServer().getPluginManager().registerEvents(couplers, this);
+            getServer().getPluginManager().registerEvents(stationRails, this);
+            getServer().getScheduler().runTaskTimer(this, stationRails::tick, 1L, 1L);
             Territory territory = new Territory(state, api, government);
             api.guardLocalDepartures(this, territory::registeredLocal);
             civics = new Civics(state, api, government, territory);
             CivicMenu civicMenu = new CivicMenu(government);
-            civicCommands = new CivicCommands(civics, government, territory, civicMenu);
+            electionMenu = new ElectionMenu(this, civics, government);
+            PartyFinance partyFinance = new PartyFinance(state, api, civics, government);
+            civicCommands = new CivicCommands(civics, government, territory, civicMenu, electionMenu, partyFinance, diplomacy);
+            getServer().getPluginManager().registerEvents(electionMenu, this);
             getServer().getPluginManager().registerEvents(civicMenu, this);
             getServer().getScheduler().runTaskTimer(this, civics::closeElections, 1L, 20L);
             long refresh = Math.clamp(getConfig().getLong("market-refresh-ms", 125), 50, 60_000);
@@ -63,6 +91,12 @@ public class TownyEconomyLaw extends JavaPlugin {
             getLogger().log(Level.SEVERE, "TownyEconomyLaw could not start", error);
             getServer().getPluginManager().disablePlugin(this);
         }
+    }
+
+    @Override
+    public void onDisable() {
+        if (stationRails != null) stationRails.releaseAll();
+        if (transitRecipes != null) transitRecipes.unregister();
     }
 
     @Override
@@ -90,6 +124,13 @@ public class TownyEconomyLaw extends JavaPlugin {
                     require(!prices.isEmpty(), "このワールドに一致するショップがありません。");
                     prices.forEach(price -> player.sendMessage(price.display()));
                 }
+            } else if (command.getName().equals("election")) {
+                require(args.length == 0 || (args.length == 1 && args[0].equalsIgnoreCase("gui")), "使い方 /election GUI");
+                electionMenu.open(player);
+            } else if (command.getName().equals("request")) {
+                diplomacy.request(player, args);
+            } else if (command.getName().equals("company") || command.getName().equals("corporation")) {
+                enterpriseCommands.execute(player, Enterprises.Kind.valueOf(command.getName().toUpperCase(Locale.ROOT)), args);
             } else {
                 dispatch(player, args);
             }
@@ -102,8 +143,16 @@ public class TownyEconomyLaw extends JavaPlugin {
         if (!(sender instanceof Player player) || government.jailed(player) || args.length != 1) return List.of();
         String prefix = args[0].toLowerCase(Locale.ROOT);
         if (command.getName().equals("shopaverage")) return "hand".startsWith(prefix) ? List.of("hand") : List.of();
+        if (command.getName().equals("election")) return "gui".startsWith(prefix) ? List.of("GUI") : List.of();
+        if (command.getName().equals("request")) {
+            return List.of("passport", "visa", "status").stream().filter(item -> item.startsWith(prefix)).toList();
+        }
+        if (command.getName().equals("company") || command.getName().equals("corporation")) {
+            return List.of("help", "list", "create", "remove", "edit", "use", "invite", "join", "leave",
+                "transfer", "plot", "train", "station", "machine", "settlement", "gate", "collect", "set", "loan").stream().filter(item -> item.startsWith(prefix)).toList();
+        }
         return List.of("help", "market", "buy", "sell", "company", "crypto", "auction", "bank",
-            "law", "role", "tax", "plot", "court", "jail", "nation", "town", "job", "constitution", "regulations", "political_party").stream().filter(item -> item.startsWith(prefix)).toList();
+            "law", "role", "tax", "plot", "court", "jail", "nation", "town", "job", "constitution", "regulations", "political_party", "train_route", "ic", "ticket", "coupler", "borrow", "repayment").stream().filter(item -> item.startsWith(prefix)).toList();
     }
 
     void run(CommandSender sender, Runnable operation) {
@@ -132,6 +181,12 @@ public class TownyEconomyLaw extends JavaPlugin {
                 player.sendMessage("暗号資産を作成しました。作成手数料 100000.00");
             }
             case "company" -> company(player, args);
+            case "train_route" -> enterpriseCommands.routeMap(player, value(args, 1));
+            case "ic" -> enterpriseCommands.ic(player, args);
+            case "ticket" -> enterpriseCommands.ticket(player, args);
+            case "coupler" -> couplers.issue(player);
+            case "borrow" -> enterpriseCommands.borrow(player, args);
+            case "repayment" -> enterpriseCommands.repay(player, args);
             case "auction" -> auction(player, args);
             case "bank" -> bank(player, args);
             case "law" -> {
@@ -307,9 +362,19 @@ public class TownyEconomyLaw extends JavaPlugin {
                 "/tel bank create <ID> <名前> | list | info <ID>",
                 "/tel bank deposit <ID> <金額> | withdraw <ID> <金額>",
                 "/tel bank fee <ID> <割合> | collect <ID>"};
+            case "train" -> new String[]{
+                "/tel train_route <企業コード> / /tel coupler",
+                "/tel ic balance / /tel ic charge <金額> / /tel ticket use",
+                "/company gate set [both|entry|exit] | remove",
+                "/company settlement <set|remove>",
+                "/company station rail set [秒] | remove",
+                "法人は /corporation を使います。"};
             case "civics" -> new String[]{
                 "/tel nation set <MDSA|EA> <制度>",
-                "/tel nation election <start|list|show|stand|vote>",
+                "/election GUI / /tel nation election <start|list|show|stand|vote>",
+                "/tel nation <impeachment|no_confidence> start <後任のMCID> [理由]",
+                "/request <passport|visa|status> / /tel nation <passport|visa|fta|tariffs|border>",
+                "/tel nation set PFPP <金額> / /tel political_party <bank|deposit|withdrawal|history|grant>",
                 "/tel nation constitution|law <add|remove> / /tel town regulations <add|edit|remove>",
                 "/tel constitution GUI / /tel law GUI / /tel regulations GUI",
                 "/tel job set <MCID> <judge|prosecutor|policeman|politician>",
@@ -327,7 +392,8 @@ public class TownyEconomyLaw extends JavaPlugin {
                 "/tel market — 証券市場 GUI",
                 "/tel buy <銘柄> <数量> | /tel sell <銘柄> <数量>",
                 "/tel crypto create <銘柄> <初値> — 手数料 100000",
-                "/tel help <company|auction|bank|law|civics>"};
+                "/tel borrow <企業コード> <金額> | info / /tel repayment <企業コード> <金額>",
+                "/tel help <company|auction|bank|law|civics|train>"};
         };
         player.sendMessage(lines);
     }

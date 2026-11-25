@@ -13,18 +13,25 @@ import static dev.townyeconomylaw.Input.money;
 import static dev.townyeconomylaw.State.require;
 
 final class Auctions {
-    record Lot(String id, ItemStack item, UUID seller, UUID bidder, long price, long end) {
+    record Lot(String id, ItemStack item, UUID seller, UUID sellerNation, UUID bidder, long price, long end,
+               Diplomacy.Tariff tariffHeld) {
         long nextBid() {
             return bidder == null ? price : price + 1;
+        }
+
+        long escrow() {
+            return price + tariffHeld.cents();
         }
     }
 
     private final State state;
     private final Integrations api;
+    private final Diplomacy diplomacy;
 
-    Auctions(State state, Integrations api) {
+    Auctions(State state, Integrations api, Diplomacy diplomacy) {
         this.state = state;
         this.api = api;
+        this.diplomacy = diplomacy;
     }
 
     private YamlConfiguration data() {
@@ -42,11 +49,13 @@ final class Auctions {
     Lot lot(String id) {
         String path = "auctions." + id;
         require(data().contains(path), "オークションが見つかりません。");
-        String bidder = data().getString(path + ".bidder");
+        UUID seller = UUID.fromString(data().getString(path + ".seller"));
+        String sellerNation = data().getString(path + ".seller-nation");
+        String tariffNation = data().getString(path + ".tariff-nation");
         return new Lot(id, data().getItemStack(path + ".item"),
-            UUID.fromString(data().getString(path + ".seller")),
-            bidder == null ? null : UUID.fromString(bidder),
-            data().getLong(path + ".price"), data().getLong(path + ".end"));
+            seller, sellerNation == null ? nation(seller) : parseUuid(sellerNation),
+            parseUuid(data().getString(path + ".bidder")), data().getLong(path + ".price"), data().getLong(path + ".end"),
+            tariffNation == null ? Diplomacy.Tariff.NONE : new Diplomacy.Tariff(UUID.fromString(tariffNation), data().getLong(path + ".tariff")));
     }
 
     void list(Player player, long minimum, int minutes) {
@@ -56,11 +65,13 @@ final class Auctions {
         long next = Math.incrementExact(data().getLong("auction-sequence"));
         String id = "a" + next;
         String path = "auctions." + id;
+        UUID sellerNation = nation(player.getUniqueId());
         state.transaction(undo -> {
             inventory.setItemInMainHand(null);
             undo.push(() -> inventory.setItemInMainHand(item));
             data().set("auction-sequence", next);
             data().set(path + ".seller", player.getUniqueId().toString());
+            data().set(path + ".seller-nation", sellerNation == null ? "" : sellerNation.toString());
             data().set(path + ".item", item);
             data().set(path + ".price", minimum);
             data().set(path + ".end", System.currentTimeMillis() + minutes * 60_000L);
@@ -69,21 +80,37 @@ final class Auctions {
     }
 
     void bid(Player player, String id, long amount) {
+        bid(player, id, amount, null);
+    }
+
+    Diplomacy.Tariff tariff(Player player, Lot lot, long amount) {
+        return lot.sellerNation() == null ? Diplomacy.Tariff.NONE : diplomacy.tariff(nation(player.getUniqueId()), lot.sellerNation(), amount);
+    }
+
+    void bid(Player player, String id, long amount, Diplomacy.Tariff expectedTariff) {
         Lot lot = lot(id);
         UUID bidder = player.getUniqueId();
         require(System.currentTimeMillis() < lot.end(), "このオークションは終了しています。");
         require(!lot.seller().equals(bidder), "自分の出品には入札できません。");
         require(amount >= lot.nextBid() && amount <= Input.MAX_CASH,
             "最低入札額は " + money(lot.nextBid()) + " です。");
+        Diplomacy.Tariff tariff = tariff(player, lot, amount);
+        require(expectedTariff == null || expectedTariff.equals(tariff), "関税額が更新されました。確認して再入札してください。");
         boolean raising = bidder.equals(lot.bidder());
+        long total = amount + tariff.cents();
+        long delta = raising ? total - lot.escrow() : total;
         String path = "auctions." + id;
         state.transaction(undo -> {
-            api.economy(undo, bidder, raising ? amount - lot.price() : amount, false);
-            if (lot.bidder() != null && !raising) addCashClaim(lot.bidder(), id, lot.price());
+            api.economy(undo, bidder, Math.abs(delta), delta < 0);
+            if (lot.bidder() != null && !raising) addCashClaim(lot.bidder(), id, lot.escrow());
             data().set(path + ".bidder", bidder.toString());
             data().set(path + ".price", amount);
+            data().set(path + ".seller-nation", lot.sellerNation() == null ? "" : lot.sellerNation().toString());
+            data().set(path + ".tariff-nation", tariff.nation() == null ? null : tariff.nation().toString());
+            data().set(path + ".tariff", tariff.nation() == null ? null : tariff.cents());
         });
-        player.sendMessage(id + " に " + money(amount) + " で入札しました。");
+        player.sendMessage(id + " に " + money(amount) + " で入札しました。"
+            + (tariff.cents() == 0 ? "" : " 関税 " + money(tariff.cents()) + " / 合計 " + money(total)));
     }
 
     void cancel(Player player, String id) {
@@ -106,7 +133,10 @@ final class Auctions {
     private void settle(Lot lot) {
         UUID recipient = lot.bidder() == null ? lot.seller() : lot.bidder();
         data().set(claim(recipient, lot.id()) + ".item", lot.item());
-        if (lot.bidder() != null) addCashClaim(lot.seller(), lot.id(), lot.price());
+        if (lot.bidder() != null) {
+            addCashClaim(lot.seller(), lot.id(), lot.price());
+            diplomacy.collectTariff(lot.tariffHeld());
+        }
         data().set("auctions." + lot.id(), null);
     }
 
@@ -142,5 +172,14 @@ final class Auctions {
 
     private String claim(UUID owner, String id) {
         return "claims." + owner + "." + id;
+    }
+
+    private UUID nation(UUID player) {
+        Integrations.Nation nation = api.nation(player);
+        return nation == null ? null : nation.id();
+    }
+
+    private static UUID parseUuid(String id) {
+        return id == null || id.isEmpty() ? null : UUID.fromString(id);
     }
 }

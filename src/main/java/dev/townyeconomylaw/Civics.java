@@ -1,12 +1,15 @@
 package dev.townyeconomylaw;
 
 import java.util.ArrayList;
+import java.util.ArrayDeque;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import org.bukkit.Bukkit;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.World;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
@@ -28,6 +31,9 @@ final class Civics {
 
     record Entry(String id, String title, String body, String penalty, String note) {}
     record Party(String code, String name, String owner, int members) {}
+    record BallotChoice(String value, String label, boolean selected) {}
+    record Ballot(String id, String type, String content, String status, boolean open, boolean entitled,
+                  boolean canStand, List<BallotChoice> choices, List<String> details) {}
 
     private static final List<String> MDSA = List.of("君主", "一党", "民主", "限定民主", "君民主", "限定民主と君主");
     private static final List<String> EA = List.of("無し", "政党", "限定民主", "民主");
@@ -221,6 +227,36 @@ final class Civics {
         actor.sendMessage(type + " を開始しました。 投票 ID " + id);
     }
 
+    void removalMotion(Player actor, OfflinePlayer successor, boolean impeachment, String reason) {
+        Integrations.Nation nation = government.citizenship(actor);
+        UUID current = nation.leader();
+        require(current != null, "国のリーダーが見つかりません。");
+        require(current.equals(actor.getUniqueId()) || politician(nation, actor.getUniqueId()),
+            "国のリーダーまたは政治家のみ動議を提出できます。");
+        UUID proposed = successor.getUniqueId();
+        require(!current.equals(proposed), "現職とは別の後継者を指定してください。");
+        Integrations.Town town = api.town(proposed);
+        require(town != null && proposed.equals(town.mayor()) && town.nation() != null
+            && nation.id().equals(town.nation().id()), "後継者は同じ国の町長である必要があります。");
+        String root = nationPath(nation) + ".elections";
+        for (String id : state.keys(root)) {
+            String path = root + "." + id;
+            require(!"受付中".equals(data().getString(path + ".status")) || !current.toString().equals(data().getString(path + ".leader-before")),
+                "現職を対象とする動議はすでに開かれています。");
+        }
+        String type = impeachment ? "弾劾" : "不信任";
+        String incumbentName = Bukkit.getOfflinePlayer(current).getName();
+        String successorName = successor.getName();
+        String ballot = start(actor, nation, type, reason.isBlank() ? type + "動議" : reason, 1,
+            electorate(nation, "限定民主"), path -> {
+                data().set(path + ".leader-before", current.toString());
+                data().set(path + ".leader-after", proposed.toString());
+                data().set(path + ".leader-before-name", incumbentName == null ? current.toString() : incumbentName);
+                data().set(path + ".leader-after-name", successorName == null ? proposed.toString() : successorName);
+            });
+        actor.sendMessage(type + "動議を開始しました。投票 ID " + ballot);
+    }
+
     void territorialVote(Player actor, Integrations.Nation nation, String kind, UUID subject, String name) {
         String id = start(actor, nation, "議会議決", name + " の離脱", 1, electorate(nation, "限定民主"), path -> {
             data().set(path + ".territory-kind", kind);
@@ -279,7 +315,7 @@ final class Civics {
         String choice = selection.toLowerCase(Locale.ROOT);
         if (candidateElection(path)) {
             choice = state.keys(path + ".candidates").stream()
-                .filter(candidate -> selection.equalsIgnoreCase(data().getString(path + ".candidates." + candidate)))
+                .filter(candidate -> candidate.equals(selection) || selection.equalsIgnoreCase(data().getString(path + ".candidates." + candidate)))
                 .findFirst().orElseThrow(() -> new State.Rejected("立候補者が見つかりません。"));
         } else {
             require(choice.equals("yes") || choice.equals("no"), "賛成は yes、反対は no を指定してください。");
@@ -296,14 +332,7 @@ final class Civics {
             String path = electionPath(nation.id(), id);
             require(data().contains(path), "選挙が見つかりません。");
             player.sendMessage(electionSummary(path, id));
-            List<String> fields = data().getStringList(path + ".fields");
-            if (fields.size() == 4) {
-                player.sendMessage(fields.get(1));
-                if (!fields.get(2).isEmpty()) player.sendMessage("罰則 " + fields.get(2));
-                if (!fields.get(3).isEmpty()) player.sendMessage("追記 " + fields.get(3));
-            }
-            String legacy = data().getString(path + ".legacy-text");
-            if (legacy != null) player.sendMessage(legacy);
+            for (String detail : ballotDetails(path)) player.sendMessage(detail);
             List<String> names = state.keys(path + ".candidates").stream()
                 .map(candidate -> data().getString(path + ".candidates." + candidate)).sorted().toList();
             if (!names.isEmpty()) player.sendMessage("候補 " + String.join(", ", names));
@@ -311,6 +340,54 @@ final class Civics {
         }
         if (state.keys(root).isEmpty()) player.sendMessage("選挙はありません。");
         for (String ballot : state.keys(root)) player.sendMessage(electionSummary(root + "." + ballot, ballot));
+    }
+
+    List<Ballot> ballots(Player player, UUID expectedNation) {
+        Integrations.Nation nation = government.citizenship(player);
+        require(nation.id().equals(expectedNation), "所属国が変更されました。選挙一覧を開き直してください。");
+        String root = nationPath(nation) + ".elections";
+        return state.keys(root).stream().map(id -> ballot(player, root, id))
+            .sorted(Comparator.comparing(Ballot::open).reversed().thenComparing(Ballot::type).thenComparing(Ballot::id))
+            .toList();
+    }
+
+    UUID ballotNation(Player player) {
+        return government.citizenship(player).id();
+    }
+
+    private Ballot ballot(Player player, String root, String id) {
+        String path = root + "." + id;
+        String voter = player.getUniqueId().toString();
+        boolean candidate = candidateElection(path);
+        String status = data().getString(path + ".status");
+        boolean open = "受付中".equals(status) && !expired(path);
+        String selected = data().getString(path + ".votes." + voter);
+        List<BallotChoice> choices = candidate ? state.keys(path + ".candidates").stream().map(key -> {
+            String name = data().getString(path + ".candidates." + key);
+            return new BallotChoice(key, name, key.equals(selected));
+        }).sorted(Comparator.comparing(BallotChoice::label, String.CASE_INSENSITIVE_ORDER)).toList()
+            : List.of(new BallotChoice("yes", "賛成", "yes".equals(selected)), new BallotChoice("no", "反対", "no".equals(selected)));
+        return new Ballot(id, data().getString(path + ".type"), data().getString(path + ".content"),
+            "受付中".equals(status) && !open ? "集計待ち" : status, open, data().getStringList(path + ".electorate").contains(voter),
+            open && candidate && !data().contains(path + ".candidates." + voter), choices, ballotDetails(path));
+    }
+
+    private List<String> ballotDetails(String path) {
+        List<String> details = new ArrayList<>();
+        String oldLeader = data().getString(path + ".leader-before-name");
+        if (oldLeader != null) {
+            details.add("現職 " + oldLeader);
+            details.add("後継者 " + data().getString(path + ".leader-after-name"));
+        }
+        List<String> fields = data().getStringList(path + ".fields");
+        if (fields.size() == 4) {
+            details.add(fields.get(1));
+            if (!fields.get(2).isEmpty()) details.add("罰則 " + fields.get(2));
+            if (!fields.get(3).isEmpty()) details.add("追記 " + fields.get(3));
+        }
+        String legacy = data().getString(path + ".legacy-text");
+        if (legacy != null) details.add(legacy);
+        return details;
     }
 
     private String electionSummary(String path, String id) {
@@ -361,12 +438,22 @@ final class Civics {
             }
             int yes = tally.getOrDefault("yes", 0);
             int no = tally.getOrDefault("no", 0);
-            String result = yes > no ? applyDecision(country, path) : "否決";
+            String result = yes > no ? applyDecision(country, path, undo) : "否決";
             data().set(path + ".status", result + "（賛成 " + yes + " / 反対 " + no + "）");
         });
     }
 
-    private String applyDecision(UUID country, String ballot) {
+    private String applyDecision(UUID country, String ballot, ArrayDeque<Runnable> undo) {
+        String incumbent = data().getString(ballot + ".leader-before");
+        if (incumbent != null) {
+            UUID successor = UUID.fromString(data().getString(ballot + ".leader-after"));
+            try {
+                api.changeNationLeader(undo, country, UUID.fromString(incumbent), successor);
+            } catch (State.Rejected failure) {
+                return "可決・交代せず " + failure.getMessage();
+            }
+            return "可決・新リーダー " + data().getString(ballot + ".leader-after-name");
+        }
         String legacy = data().getString(ballot + ".legacy-law");
         if (legacy != null) {
             String path = nationPath(country) + ".laws." + legacy;
@@ -445,6 +532,7 @@ final class Civics {
         UUID playerId = player.getUniqueId();
         if (action.equals("remove")) {
             require(playerId.toString().equals(party.owner()), "政党代表のみ解散できます。");
+            require(data().getLong(path + ".bank") == 0, "政党資金を精算してから解散してください。");
             state.transaction(undo -> data().set(path, null));
         } else {
             require(memberParty(nation, playerId) == null, "すでに政党に所属しています。");
@@ -485,7 +573,7 @@ final class Civics {
             "政党に所属していない同じ国の住民のみ招待できます。");
     }
 
-    private String memberParty(Integrations.Nation nation, UUID member) {
+    String memberParty(Integrations.Nation nation, UUID member) {
         if (member == null) return null;
         String root = nationPath(nation) + ".parties";
         return state.keys(root).stream().filter(code -> data().getBoolean(root + "." + code + ".members." + member))

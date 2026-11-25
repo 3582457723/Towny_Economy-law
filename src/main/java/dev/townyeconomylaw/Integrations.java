@@ -143,6 +143,32 @@ final class Integrations {
         call(to, "save");
     }
 
+    void changeNationLeader(ArrayDeque<Runnable> undo, UUID country, UUID expected, UUID successor) {
+        Object nation = call(towny, "getNation", UUID.class, country);
+        Nation current = nation(nation);
+        require(current != null && expected.equals(current.leader()), "国のリーダーが変更されています。");
+        Town nextTown = town(successor);
+        require(nextTown != null && successor.equals(nextTown.mayor()) && nextTown.nation() != null
+            && country.equals(nextTown.nation().id()), "後継者は同じ国の町長である必要があります。");
+
+        Object previous = call(nation, "getKing");
+        Object next = call(towny, "getResident", UUID.class, successor);
+        Class<?> residentType = townyType("object.Resident");
+        Class<?> positionType = townyType("object.Position");
+        Object spawn = call(nation, "spawnPosition");
+        undo.push(() -> {
+            if (!expected.equals(nation(nation).leader())) {
+                call(nation, "setKing", residentType, previous);
+                call(nation, "spawnPosition", positionType, spawn);
+                call(nation, "save");
+            }
+        });
+        call(nation, "setKing", residentType, next);
+        if (!successor.equals(nation(nation).leader())) {
+            throw new IllegalStateException("Towny did not apply the approved leadership change");
+        }
+    }
+
     void guardLocalDepartures(Plugin plugin, java.util.function.BiPredicate<UUID, UUID> registered) {
         org.bukkit.event.Listener listener = new org.bukkit.event.Listener() {};
         for (String name : List.of("NationPreTownLeaveEvent", "NationPreTownKickEvent")) {
@@ -182,9 +208,36 @@ final class Integrations {
         return town == null ? null : nation(call(town, "getNationOrNull"));
     }
 
-    String plotKey(Location location) {
+    record PlotAccess(String key, UUID town, UUID resident, UUID controller) {
+        String ownership() {
+            return town + ":" + (resident == null ? "" : resident);
+        }
+    }
+
+    PlotAccess plotAccess(Location location) {
         Object plot = call(towny, "getTownBlock", Location.class, location);
         if (plot == null) return null;
+        Object town = call(plot, "getTownOrNull");
+        if (town == null) return null;
+        Object resident = call(plot, "getResidentOrNull");
+        Object controller = resident == null ? call(town, "getMayor") : resident;
+        return new PlotAccess(plotKey(location, plot), (UUID) call(town, "getUUID"),
+            resident == null ? null : (UUID) call(resident, "getUUID"),
+            controller == null ? null : (UUID) call(controller, "getUUID"));
+    }
+
+    String plotKey(Location location) {
+        Object plot = call(towny, "getTownBlock", Location.class, location);
+        return plot == null ? null : plotKey(location, plot);
+    }
+
+    String plotCoordinate(Location location) {
+        Class<?> type = townyType("object.WorldCoord");
+        Object coordinate = invoke(type, null, "parseWorldCoord", new Class<?>[]{Location.class}, location);
+        return location.getWorld().getUID() + ":" + call(coordinate, "getX") + ":" + call(coordinate, "getZ");
+    }
+
+    private String plotKey(Location location, Object plot) {
         Object coord = call(plot, "getCoord");
         return location.getWorld().getUID() + ":" + call(coord, "getX") + ":" + call(coord, "getZ");
     }

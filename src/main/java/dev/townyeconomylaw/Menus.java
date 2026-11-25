@@ -26,7 +26,7 @@ import static dev.townyeconomylaw.State.require;
 
 final class Menus implements Listener {
     enum Screen { MARKET, AUCTION }
-    private record Entry(String id, String quote, long bid) {}
+    private record Entry(String id, String quote, long bid, Diplomacy.Tariff tariff) {}
 
     private static final int PAGE_SIZE = 45;
     private final TownyEconomyLaw plugin;
@@ -80,12 +80,13 @@ final class Menus implements Listener {
             String id = ids.get(start + slot);
             if (menu.screen == Screen.MARKET) {
                 String quote = market.quote(id);
-                menu.entries.put(slot, new Entry(id, quote, 0));
+                menu.entries.put(slot, new Entry(id, quote, 0, null));
                 put(menu, slot, named(new ItemStack(Material.PAPER), id, List.of(line(market.description(id)), line(quote),
                     line("保有 " + market.holding(player.getUniqueId(), id)), line("左クリックで1口購入 / 右クリックで1口売却"))));
             } else {
                 Auctions.Lot lot = auctions.lot(id);
-                menu.entries.put(slot, new Entry(id, null, lot.nextBid()));
+                Diplomacy.Tariff tariff = auctions.tariff(player, lot, lot.nextBid());
+                menu.entries.put(slot, new Entry(id, null, lot.nextBid(), tariff));
                 ItemStack icon = lot.item().clone();
                 ItemMeta meta = icon.getItemMeta();
                 List<Component> originalLore = meta == null ? null : meta.lore();
@@ -94,6 +95,7 @@ final class Menus implements Listener {
                 lore.add(line(id + " / " + (lot.bidder() == null ? "開始価格 " : "現在価格 ") + money(lot.price())));
                 lore.add(line("残り " + seconds + " 秒"));
                 lore.add(line("左クリックで " + money(lot.nextBid()) + " を入札"));
+                if (tariff.cents() != 0) lore.add(line("関税 " + money(tariff.cents()) + " / 合計 " + money(lot.nextBid() + tariff.cents())));
                 put(menu, slot, named(icon, null, lore));
             }
         }
@@ -143,7 +145,7 @@ final class Menus implements Listener {
                     require(entry.quote().equals(market.quote(entry.id())), "価格が更新されました。確認して操作してください。");
                     market.trade(player, entry.id(), 1, click == ClickType.LEFT);
                 } else if (click == ClickType.LEFT) {
-                    auctions.bid(player, entry.id(), entry.bid());
+                    auctions.bid(player, entry.id(), entry.bid(), entry.tariff());
                 }
             }
             render(player, menu);

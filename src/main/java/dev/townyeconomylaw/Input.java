@@ -1,6 +1,8 @@
 package dev.townyeconomylaw;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
 import org.bukkit.Bukkit;
@@ -10,6 +12,7 @@ import org.bukkit.entity.Player;
 import static dev.townyeconomylaw.State.require;
 
 final class Input {
+    private static final Pattern ARGUMENT = Pattern.compile("\"([^\"]*)\"|([^\\s\"]+)");
     private static final Pattern KEY = Pattern.compile("[a-z0-9_-]{2,24}");
     private static final Pattern DECIMAL = Pattern.compile("[0-9]{1,13}(\\.[0-9]{1,2})?");
     private static final Pattern INTEGER = Pattern.compile("[0-9]{1,7}");
@@ -67,6 +70,20 @@ final class Input {
     static long credit(long balance, long amount) {
         long result = Math.addExact(balance, amount);
         require(result >= 0 && result <= MAX_CASH, "残高上限を超えるため処理できません。");
+        return result;
+    }
+    static List<String> arguments(String[] input) {
+        String joined = String.join(" ", input);
+        var matcher = ARGUMENT.matcher(joined);
+        List<String> result = new ArrayList<>();
+        int previous = 0;
+        while (matcher.find()) {
+            require((previous == 0 || matcher.start() > previous) && joined.substring(previous, matcher.start()).isBlank(),
+                "空白を含む引数は二重引用符で囲んでください。");
+            result.add(matcher.group(1) != null ? matcher.group(1) : matcher.group(2));
+            previous = matcher.end();
+        }
+        require(joined.substring(previous).isBlank(), "二重引用符を閉じてください。");
         return result;
     }
 }
