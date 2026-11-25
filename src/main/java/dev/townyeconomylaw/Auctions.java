@@ -13,7 +13,7 @@ import static dev.townyeconomylaw.Input.money;
 import static dev.townyeconomylaw.State.require;
 
 final class Auctions {
-    record Lot(String id, ItemStack item, UUID seller, UUID sellerNation, UUID bidder, long price, long end,
+    record Lot(String id, ItemStack item, UUID seller, UUID sellerNation, UUID bidder, UUID bidderNation, long price, long end,
                Diplomacy.Tariff tariffHeld) {
         long nextBid() {
             return bidder == null ? price : price + 1;
@@ -51,10 +51,13 @@ final class Auctions {
         require(data().contains(path), "オークションが見つかりません。");
         UUID seller = UUID.fromString(data().getString(path + ".seller"));
         String sellerNation = data().getString(path + ".seller-nation");
+        UUID bidder = parseUuid(data().getString(path + ".bidder"));
+        String bidderNation = data().getString(path + ".bidder-nation");
         String tariffNation = data().getString(path + ".tariff-nation");
         return new Lot(id, data().getItemStack(path + ".item"),
             seller, sellerNation == null ? nation(seller) : parseUuid(sellerNation),
-            parseUuid(data().getString(path + ".bidder")), data().getLong(path + ".price"), data().getLong(path + ".end"),
+            bidder, bidderNation == null && bidder != null ? nation(bidder) : parseUuid(bidderNation),
+            data().getLong(path + ".price"), data().getLong(path + ".end"),
             tariffNation == null ? Diplomacy.Tariff.NONE : new Diplomacy.Tariff(UUID.fromString(tariffNation), data().getLong(path + ".tariff")));
     }
 
@@ -90,6 +93,8 @@ final class Auctions {
     void bid(Player player, String id, long amount, Diplomacy.Tariff expectedTariff) {
         Lot lot = lot(id);
         UUID bidder = player.getUniqueId();
+        UUID country = nation(bidder);
+        require(!blocked(lot, country), "経済制裁によりこの取引はできません。");
         require(System.currentTimeMillis() < lot.end(), "このオークションは終了しています。");
         require(!lot.seller().equals(bidder), "自分の出品には入札できません。");
         require(amount >= lot.nextBid() && amount <= Input.MAX_CASH,
@@ -104,6 +109,7 @@ final class Auctions {
             api.economy(undo, bidder, Math.abs(delta), delta < 0);
             if (lot.bidder() != null && !raising) addCashClaim(lot.bidder(), id, lot.escrow());
             data().set(path + ".bidder", bidder.toString());
+            data().set(path + ".bidder-nation", country == null ? "" : country.toString());
             data().set(path + ".price", amount);
             data().set(path + ".seller-nation", lot.sellerNation() == null ? "" : lot.sellerNation().toString());
             data().set(path + ".tariff-nation", tariff.nation() == null ? null : tariff.nation().toString());
@@ -130,10 +136,23 @@ final class Auctions {
         if (!expired.isEmpty()) state.transaction(undo -> expired.forEach(this::settle));
     }
 
+    boolean tradeBlocked(Player player, Lot lot) {
+        return blocked(lot, nation(player.getUniqueId()));
+    }
+
+    private boolean blocked(Lot lot, UUID buyerCountry) {
+        return diplomacy.tradeBlocked(buyerCountry, lot.sellerNation())
+            || diplomacy.tradeBlocked(buyerCountry, nation(lot.seller()));
+    }
+
     private void settle(Lot lot) {
-        UUID recipient = lot.bidder() == null ? lot.seller() : lot.bidder();
+        boolean banned = lot.bidder() != null
+            && (blocked(lot, lot.bidderNation()) || blocked(lot, nation(lot.bidder())));
+        UUID recipient = lot.bidder() == null || banned ? lot.seller() : lot.bidder();
         data().set(claim(recipient, lot.id()) + ".item", lot.item());
-        if (lot.bidder() != null) {
+        if (banned) {
+            addCashClaim(lot.bidder(), lot.id(), lot.escrow());
+        } else if (lot.bidder() != null) {
             addCashClaim(lot.seller(), lot.id(), lot.price());
             diplomacy.collectTariff(lot.tariffHeld());
         }

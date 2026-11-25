@@ -127,7 +127,7 @@ final class Government {
         return location;
     }
 
-    void jail(Player actor, Player target, int minutes, String lawId) {
+    long jail(Player actor, Player target, int minutes, String lawId, Wanted wanted) {
         Integrations.Nation nation = authorize(actor, Role.WARDEN);
         Integrations.Nation subjectNation = api.nation(target.getUniqueId());
         require(!actor.equals(target), "自分を拘禁することはできません。");
@@ -138,14 +138,17 @@ final class Government {
         Location anchor = activePlot(nation, Plot.JAIL);
         String plotKey = api.plotKey(anchor);
         String path = jailPath(target);
+        long[] reward = {0};
         state.transaction(undo -> {
             saveLocation(path, anchor, plotKey);
             data().set(path + ".until", System.currentTimeMillis() + minutes * 60_000L);
             data().set(path + ".nation", nation.id().toString());
             data().set(path + ".law", lawId);
             data().set(path + ".officer", actor.getUniqueId().toString());
+            reward[0] = wanted.capture(nation, actor, target, undo);
         });
         target.sendMessage("拘禁されました。 " + minutes + " 分 / 適用法 " + lawId);
+        return reward[0];
     }
 
     void release(CommandSender actor, OfflinePlayer target) {
@@ -161,7 +164,7 @@ final class Government {
         if (online != null) online.sendMessage("釈放されました。");
     }
 
-    boolean jailed(Player player) {
+    boolean jailed(OfflinePlayer player) {
         return data().getLong(jailPath(player) + ".until") > System.currentTimeMillis();
     }
 
@@ -180,7 +183,7 @@ final class Government {
             && destination.getBlockZ() == anchor.getBlockZ();
     }
 
-    private String jailPath(Player player) {
+    private String jailPath(OfflinePlayer player) {
         return "jail." + player.getUniqueId();
     }
 

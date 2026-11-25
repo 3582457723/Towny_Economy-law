@@ -20,9 +20,15 @@ final class CivicCommands {
     private final ElectionMenu electionMenu;
     private final PartyFinance partyFinance;
     private final Diplomacy diplomacy;
+    private final Alliances alliances;
+    private final BasicIncome basicIncome;
+    private final PlotRent rent;
+    private final Wanted wanted;
+    private final Spies spies;
 
     CivicCommands(Civics civics, Government government, Territory territory, CivicMenu menu,
-                  ElectionMenu electionMenu, PartyFinance partyFinance, Diplomacy diplomacy) {
+                  ElectionMenu electionMenu, PartyFinance partyFinance, Diplomacy diplomacy, Alliances alliances,
+                  BasicIncome basicIncome, PlotRent rent, Wanted wanted, Spies spies) {
         this.civics = civics;
         this.government = government;
         this.territory = territory;
@@ -30,6 +36,11 @@ final class CivicCommands {
         this.electionMenu = electionMenu;
         this.partyFinance = partyFinance;
         this.diplomacy = diplomacy;
+        this.alliances = alliances;
+        this.basicIncome = basicIncome;
+        this.rent = rent;
+        this.wanted = wanted;
+        this.spies = spies;
     }
 
     void nation(Player player, String[] input) {
@@ -38,10 +49,16 @@ final class CivicCommands {
         switch (operation) {
             case "set" -> {
                 String system = action(args, 2);
-                if (system.equals("pfpp")) partyFinance.setGrant(player, Input.cents(argument(args, 3), 0, Input.MAX_CASH));
-                else civics.setSystem(player, system, argument(args, 3));
+                switch (system) {
+                    case "pfpp" -> partyFinance.setGrant(player, Input.cents(argument(args, 3), 0, Input.MAX_CASH));
+                    case "basic_income" -> basicIncome.set(player, Input.cents(argument(args, 3), 0, Input.MAX_CASH));
+                    default -> civics.setSystem(player, system, argument(args, 3));
+                }
             }
             case "passport", "visa", "tariffs", "fta", "border" -> diplomacy.nation(player, input);
+            case "reaty", "treaty", "alliance", "es" -> alliances.nation(player, input);
+            case "wanted" -> wanted.command(player, args);
+            case "spy" -> spies.command(player, args);
             case "impeachment", "no_confidence" -> {
                 require(action(args, 2).equals("start"),
                     "使い方 /tel nation <impeachment|no_confidence> start <後任のMCID> [理由]");
@@ -103,6 +120,7 @@ final class CivicCommands {
             return;
         }
         switch (operation) {
+            case "rent" -> rent(player, args);
             case "puppet" -> {
                 switch (action(args, 2)) {
                     case "create" -> territory.createPuppet(player, argument(args, 3), knownPlayer(argument(args, 4)));
@@ -121,6 +139,19 @@ final class CivicCommands {
                 }
             }
             default -> throw new State.Rejected("使い方 /tel plot <set|show|puppet|decentralization>");
+        }
+    }
+
+    private void rent(Player player, List<String> args) {
+        String operation = args.size() > 2 ? action(args, 2) : "show";
+        switch (operation) {
+            case "add" -> rent.add(player, knownPlayer(argument(args, 3)), Input.cents(argument(args, 4), 0, Input.MAX_CASH));
+            case "set" -> rent.set(player, knownPlayer(argument(args, 3)), Input.cents(argument(args, 4), 0, Input.MAX_CASH));
+            case "remove" -> rent.remove(player, knownPlayer(argument(args, 3)));
+            case "accept" -> rent.accept(player);
+            case "leave" -> rent.leave(player);
+            case "show" -> rent.show(player);
+            default -> throw new State.Rejected("使い方 /tel plot rent <add|set|remove|accept|leave|show>");
         }
     }
 

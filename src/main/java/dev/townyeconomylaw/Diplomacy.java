@@ -42,12 +42,14 @@ final class Diplomacy implements Listener {
     private final State state;
     private final Integrations api;
     private final Government government;
+    private final Alliances alliances;
     private boolean hasVisaBorders;
 
-    Diplomacy(State state, Integrations api, Government government) {
+    Diplomacy(State state, Integrations api, Government government, Alliances alliances) {
         this.state = state;
         this.api = api;
         this.government = government;
+        this.alliances = alliances;
         refreshBorders();
     }
 
@@ -205,10 +207,15 @@ final class Diplomacy implements Listener {
 
     Tariff tariff(UUID importer, UUID exporter, long price) {
         if (importer == null || exporter == null || importer.equals(exporter)
-            || data().getBoolean(treatyPath(importer, exporter) + ".active")) return Tariff.NONE;
+            || data().getBoolean(treatyPath(importer, exporter) + ".active")
+            || alliances.dutyFree(importer, exporter)) return Tariff.NONE;
         long rate = data().getLong(tariffPath(importer));
         long cents = Market.fee(price, rate);
         return cents == 0 ? Tariff.NONE : new Tariff(importer, cents);
+    }
+
+    boolean tradeBlocked(UUID first, UUID second) {
+        return alliances.sanctioned(first, second);
     }
 
     void collectTariff(Tariff tariff) {

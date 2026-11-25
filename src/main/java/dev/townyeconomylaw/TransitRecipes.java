@@ -24,6 +24,14 @@ final class TransitRecipes {
     }
 
     void register() {
+        ItemStack ticketMachine = item(Material.DROPPER, "ticket_machine", "汎用券売機");
+        add(recipe("ticket_machine", ticketMachine, "IBI", "IGI", "DOI")
+            .setIngredient('I', Material.IRON_INGOT)
+            .setIngredient('B', Material.BLACK_DYE)
+            .setIngredient('G', Material.GLASS_PANE)
+            .setIngredient('D', Material.DROPPER)
+            .setIngredient('O', Material.OBSERVER));
+
         ItemStack stationRail = item(Material.RAIL, "station_rail", "ステーションレール");
         add(recipe("station_rail", stationRail, "ICI", "ISI", "IOI")
             .setIngredient('I', Material.IRON_INGOT)

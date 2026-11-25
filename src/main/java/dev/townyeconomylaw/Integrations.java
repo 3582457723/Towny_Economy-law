@@ -216,14 +216,57 @@ final class Integrations {
 
     PlotAccess plotAccess(Location location) {
         Object plot = call(towny, "getTownBlock", Location.class, location);
-        if (plot == null) return null;
+        return plot == null ? null : plotAccess(plotKey(location, plot), plot);
+    }
+
+    private PlotAccess plotAccess(String key, Object plot) {
         Object town = call(plot, "getTownOrNull");
         if (town == null) return null;
         Object resident = call(plot, "getResidentOrNull");
         Object controller = resident == null ? call(town, "getMayor") : resident;
-        return new PlotAccess(plotKey(location, plot), (UUID) call(town, "getUUID"),
+        return new PlotAccess(key, (UUID) call(town, "getUUID"),
             resident == null ? null : (UUID) call(resident, "getUUID"),
             controller == null ? null : (UUID) call(controller, "getUUID"));
+    }
+
+    boolean registerPlotTenancy(Plugin plugin, java.util.function.BiPredicate<UUID, PlotAccess> allowed) {
+        try {
+            Class<? extends org.bukkit.event.Event> type = townyClass("event.player.PlayerCacheGetTownBlockStatusEvent")
+                .asSubclass(org.bukkit.event.Event.class);
+            Class<?> coordinateType = townyClass("object.WorldCoord");
+            Class<?> statusType = type.getMethod("getTownBlockStatus").getReturnType();
+            Object trusted = statusType.getField("PLOT_TRUSTED").get(null);
+            type.getMethod("setTownBlockStatus", statusType);
+            Bukkit.getPluginManager().getPlugin("Towny").getClass().getMethod("deleteCache", UUID.class);
+
+            org.bukkit.event.Listener listener = new org.bukkit.event.Listener() {};
+            Bukkit.getPluginManager().registerEvent(type, listener, org.bukkit.event.EventPriority.HIGH,
+                (ignored, event) -> {
+                    String status = ((Enum<?>) call(event, "getTownBlockStatus")).name();
+                    if (!List.of("OUTSIDER", "PLOT_FRIEND", "PLOT_TOWN", "PLOT_ALLY", "TOWN_RESIDENT",
+                            "TOWN_ALLY", "TOWN_NATION").contains(status)) return;
+
+                    Player player = (Player) call(event, "getPlayer");
+                    Object coordinate = call(event, "getWorldCoord");
+                    org.bukkit.World world = Bukkit.getWorld((String) call(coordinate, "getWorldName"));
+                    if (world == null) return;
+                    Object plot = call(towny, "getTownBlock", coordinateType, coordinate);
+                    if (plot == null) return;
+                    String key = world.getUID() + ":" + call(coordinate, "getX") + ":" + call(coordinate, "getZ");
+                    PlotAccess access = plotAccess(key, plot);
+                    if (access != null && allowed.test(player.getUniqueId(), access)) {
+                        call(event, "setTownBlockStatus", statusType, trusted);
+                    }
+                }, plugin);
+            return true;
+        } catch (ReflectiveOperationException | LinkageError | RuntimeException error) {
+            plugin.getLogger().warning("Towny plot rental access unavailable: " + error.getMessage());
+            return false;
+        }
+    }
+
+    void invalidatePlotTenant(UUID tenant) {
+        call(Bukkit.getPluginManager().getPlugin("Towny"), "deleteCache", UUID.class, tenant);
     }
 
     String plotKey(Location location) {

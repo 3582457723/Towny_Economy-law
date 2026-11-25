@@ -94,7 +94,8 @@ final class Menus implements Listener {
                 long seconds = Math.max(0, (lot.end() - System.currentTimeMillis() + 999) / 1_000);
                 lore.add(line(id + " / " + (lot.bidder() == null ? "開始価格 " : "現在価格 ") + money(lot.price())));
                 lore.add(line("残り " + seconds + " 秒"));
-                lore.add(line("左クリックで " + money(lot.nextBid()) + " を入札"));
+                lore.add(line(auctions.tradeBlocked(player, lot) ? "経済制裁により入札できません"
+                    : "左クリックで " + money(lot.nextBid()) + " を入札"));
                 if (tariff.cents() != 0) lore.add(line("関税 " + money(tariff.cents()) + " / 合計 " + money(lot.nextBid() + tariff.cents())));
                 put(menu, slot, named(icon, null, lore));
             }
