@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Verify and package
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          mvn -B -ntp clean verify
+          test -s "target/towny-economy-law-$version.jar"
+          unzip -p "target/towny-economy-law-$version.jar" plugin.yml | grep -Fx "version: $version"
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          cat > "$RUNNER_TEMP/release-notes.md" <<'NOTES'
+          Purpur 1.21.11 / Java 21 用の TownyEconomyLaw です。Towny、Vault、小数第2位対応の Vault 経済プロバイダーが必要です。
+
+          - 証券市場、オークション、銀行、企業・法人の融資、闇市
+          - 企業・法人のロットと鉄道、券売機・IC カード・改札・のりこし精算
+          - 法令、選挙・支持率、指名手配、賃貸、新規参加者へのベーシックインカム
+          - パスポート・ビザ、条約・同盟、関税・経済制裁、専用チャット
+
+          添付 JAR をサーバーの `plugins/` に入れてください。コマンドと設定は README を参照してください。
+          NOTES
+          gh release create "$GITHUB_REF_NAME" "target/towny-economy-law-$version.jar" \
+            --verify-tag --title "TownyEconomyLaw $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/release-notes.md"
