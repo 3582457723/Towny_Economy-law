@@ -1,2 +1,6 @@
 # GUI 更新の目標間隔。実際の描画はサーバーのメインスレッドの tick 境界になります。
 market-refresh-ms: 125
+
+# 感染確率を適用する接触・空気曝露の間隔（20 TPS 換算の秒、5〜300）。
+game-illness:
+  exposure-interval-seconds: 30

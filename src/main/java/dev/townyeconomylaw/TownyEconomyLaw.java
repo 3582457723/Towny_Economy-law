@@ -42,6 +42,10 @@ public class TownyEconomyLaw extends JavaPlugin {
     private PrivateChat privateChat;
     private BlackMarket blackMarket;
     private BlackMarketMenu blackMarketMenu;
+    private GameCalendar calendar;
+    private GameHerbs herbs;
+    private GameIllness illness;
+    private GameFoxes foxes;
 
     @Override
     public void onEnable() {
@@ -57,6 +61,23 @@ public class TownyEconomyLaw extends JavaPlugin {
             auctions = new Auctions(state, api, diplomacy);
             getServer().getPluginManager().registerEvents(diplomacy, this);
             jail = new JailGuard(government);
+            calendar = new GameCalendar(state);
+            calendar.start();
+            herbs = new GameHerbs(this, state, government);
+            herbs.register();
+            illness = new GameIllness(this, state, calendar, herbs, government);
+            foxes = new GameFoxes(this, government, herbs, illness, calendar);
+            foxes.loadExisting();
+            GameEmergency emergency = new GameEmergency(state, api, government, illness);
+            ReligiousSites religiousSites = new ReligiousSites(state, api, government);
+            getServer().getPluginManager().registerEvents(calendar, this);
+            getServer().getPluginManager().registerEvents(herbs, this);
+            getServer().getPluginManager().registerEvents(illness, this);
+            getServer().getPluginManager().registerEvents(foxes, this);
+            getServer().getPluginManager().registerEvents(emergency, this);
+            getServer().getScheduler().runTaskTimer(this, calendar::tick, 20L, 20L);
+            getServer().getScheduler().runTaskTimer(this, illness::tick, 20L, 20L);
+            getServer().getScheduler().runTaskTimer(this, foxes::tick, 20L, 20L);
             wanted = new Wanted(state, api, government);
             approvalRatings = new ApprovalRatings(this, state, api, government);
             BasicIncome basicIncome = new BasicIncome(state, api, government);
@@ -96,7 +117,7 @@ public class TownyEconomyLaw extends JavaPlugin {
             electionMenu = new ElectionMenu(this, civics, government);
             PartyFinance partyFinance = new PartyFinance(state, api, civics, government);
             civicCommands = new CivicCommands(civics, government, territory, civicMenu, electionMenu, partyFinance, diplomacy,
-                alliances, basicIncome, rent, wanted, spies);
+                alliances, basicIncome, rent, wanted, spies, emergency, religiousSites);
             privateChat = new PrivateChat(this, state, api, government, civics, alliances, spies);
             getServer().getPluginManager().registerEvents(privateChat, this);
             getServer().getPluginManager().registerEvents(electionMenu, this);
@@ -121,12 +142,17 @@ public class TownyEconomyLaw extends JavaPlugin {
     public void onDisable() {
         if (stationRails != null) stationRails.releaseAll();
         if (transitRecipes != null) transitRecipes.unregister();
+        if (herbs != null) herbs.unregister();
+        if (illness != null) illness.shutdown();
+        if (calendar != null) calendar.stop();
     }
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!(sender instanceof Player player)) {
-            if (command.getName().equals("tel") && args.length == 3
+            if (command.getName().equals("tel") && args.length > 0 && args[0].equalsIgnoreCase("illness")) {
+                run(sender, () -> illness(sender, args));
+            } else if (command.getName().equals("tel") && args.length == 3
                     && action(args, 0).equals("jail") && action(args, 1).equals("release")) {
                 run(sender, () -> {
                     government.release(sender, knownPlayer(args[2]));
@@ -179,7 +205,7 @@ public class TownyEconomyLaw extends JavaPlugin {
                 "transfer", "plot", "train", "station", "machine", "settlement", "gate", "collect", "set", "loan").stream().filter(item -> item.startsWith(prefix)).toList();
         }
         return List.of("help", "market", "buy", "sell", "company", "crypto", "auction", "bank",
-            "law", "role", "tax", "plot", "court", "jail", "nation", "town", "job", "constitution", "regulations", "political_party", "train_route", "ic", "ticket", "coupler", "borrow", "repayment", "blackmarket", "chat").stream().filter(item -> item.startsWith(prefix)).toList();
+            "law", "role", "tax", "plot", "court", "jail", "nation", "town", "job", "constitution", "regulations", "political_party", "train_route", "ic", "ticket", "coupler", "borrow", "repayment", "blackmarket", "chat", "season", "illness", "fox").stream().filter(item -> item.startsWith(prefix)).toList();
     }
 
     void run(CommandSender sender, Runnable operation) {
@@ -216,6 +242,19 @@ public class TownyEconomyLaw extends JavaPlugin {
             case "repayment" -> enterpriseCommands.repay(player, args);
             case "blackmarket", "black_market" -> blackMarket(player, args);
             case "chat" -> privateChat.command(player, args);
+            case "season" -> {
+                GameCalendar.Date date = calendar.current(player.getWorld());
+                player.sendMessage(player.getWorld().getName() + " / " + date.year() + "年" + date.month() + "月" + date.day()
+                    + "日 / " + date.season().label);
+            }
+            case "illness" -> illness(player, args);
+            case "fox" -> {
+                switch (action(args, 1)) {
+                    case "call" -> foxes.call(player, text(args, 2, 80));
+                    case "info" -> foxes.info(player);
+                    default -> throw new State.Rejected("使い方 /tel fox <call <名前>|info>");
+                }
+            }
             case "auction" -> auction(player, args);
             case "bank" -> bank(player, args);
             case "law" -> {
@@ -261,6 +300,21 @@ public class TownyEconomyLaw extends JavaPlugin {
             default -> throw new State.Rejected("使い方 /tel help company");
         }
         player.sendMessage("組織情報を更新しました。 " + id);
+    }
+
+    private void illness(CommandSender sender, String[] args) {
+        String operation = args.length > 1 ? action(args, 1) : "status";
+        if (operation.equals("status") && args.length <= 2 && sender instanceof Player player) {
+            illness.status(sender, player);
+            return;
+        }
+        require(List.of("status", "seed", "clear").contains(operation), "使い方 /tel illness <status|seed|clear>");
+        require(sender.hasPermission("townyeconomylaw.illness.manage"), "病気システムの管理権限が必要です。");
+        Player target = Bukkit.getPlayerExact(value(args, 2));
+        require(target != null, "オンラインの対象プレイヤーが見つかりません。");
+        if (operation.equals("status")) illness.status(sender, target);
+        else if (operation.equals("seed")) illness.seed(target, value(args, 3));
+        else illness.clear(target, value(args, 3));
     }
 
     private void blackMarket(Player player, String[] args) {
@@ -412,6 +466,12 @@ public class TownyEconomyLaw extends JavaPlugin {
                 "/company settlement <set|remove>",
                 "/company station rail set [秒] | remove",
                 "法人は /corporation を使います。"};
+            case "world" -> new String[]{
+                "/tel season / /tel illness status",
+                "/tel fox call <名前> / /tel fox info",
+                "/tel plot set religious / /tel plot religious <set|show|list|remove>",
+                "/tel nation lockdown <on|off|status> / /tel town lockdown <on|off|status>",
+                "/tel nation emergency <declare|clear|status> / /tel town emergency <declare|clear|status>"};
             case "nation" -> new String[]{
                 "/tel nation wanted <create|revoke|list> / /approval_rating GUI",
                 "/tel nation set basic_income <金額> / /tel plot rent <add|set|remove|accept|leave|show>",
@@ -441,7 +501,7 @@ public class TownyEconomyLaw extends JavaPlugin {
                 "/tel buy <銘柄> <数量> | /tel sell <銘柄> <数量>",
                 "/tel crypto create <銘柄> <初値> — 手数料 100000",
                 "/tel borrow <企業コード> <金額> | info / /tel repayment <企業コード> <金額>",
-                "/tel help <company|auction|bank|law|civics|train|nation>"};
+                "/tel help <company|auction|bank|law|civics|train|nation|world>"};
         };
         player.sendMessage(lines);
     }

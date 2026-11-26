@@ -25,10 +25,13 @@ final class CivicCommands {
     private final PlotRent rent;
     private final Wanted wanted;
     private final Spies spies;
+    private final GameEmergency emergency;
+    private final ReligiousSites religiousSites;
 
     CivicCommands(Civics civics, Government government, Territory territory, CivicMenu menu,
                   ElectionMenu electionMenu, PartyFinance partyFinance, Diplomacy diplomacy, Alliances alliances,
-                  BasicIncome basicIncome, PlotRent rent, Wanted wanted, Spies spies) {
+                  BasicIncome basicIncome, PlotRent rent, Wanted wanted, Spies spies,
+                  GameEmergency emergency, ReligiousSites religiousSites) {
         this.civics = civics;
         this.government = government;
         this.territory = territory;
@@ -41,6 +44,8 @@ final class CivicCommands {
         this.rent = rent;
         this.wanted = wanted;
         this.spies = spies;
+        this.emergency = emergency;
+        this.religiousSites = religiousSites;
     }
 
     void nation(Player player, String[] input) {
@@ -58,6 +63,7 @@ final class CivicCommands {
             case "passport", "visa", "tariffs", "fta", "border" -> diplomacy.nation(player, input);
             case "reaty", "treaty", "alliance", "es" -> alliances.nation(player, input);
             case "wanted" -> wanted.command(player, args);
+            case "emergency", "lockdown" -> emergency.command(player, true, args);
             case "spy" -> spies.command(player, args);
             case "impeachment", "no_confidence" -> {
                 require(action(args, 2).equals("start"),
@@ -83,8 +89,11 @@ final class CivicCommands {
 
     void town(Player player, String[] input) {
         List<String> args = Input.arguments(input);
-        require(action(args, 1).equals("regulations"), "使い方 /tel town regulations <add|remove|edit>");
-        document(player, Civics.Document.REGULATION, args);
+        switch (action(args, 1)) {
+            case "regulations" -> document(player, Civics.Document.REGULATION, args);
+            case "emergency", "lockdown" -> emergency.command(player, false, args);
+            default -> throw new State.Rejected("使い方 /tel town <regulations|emergency|lockdown>");
+        }
     }
 
     void job(Player player, String[] args) {
@@ -104,23 +113,29 @@ final class CivicCommands {
         List<String> args = Input.arguments(input);
         String operation = action(args, 1);
         if (operation.equals("set")) {
-            Government.Plot type = switch (action(args, 2)) {
+            String kind = action(args, 2);
+            if (kind.equals("religious")) {
+                religiousSites.mark(player);
+                return;
+            }
+            Government.Plot type = switch (kind) {
                 case "jail" -> Government.Plot.JAIL;
                 case "courthouse", "courtroom" -> Government.Plot.COURTHOUSE;
                 case "police" -> Government.Plot.POLICE;
                 case "legislature" -> Government.Plot.LEGISLATURE;
-                default -> throw new State.Rejected("プロット種別は jail / courthouse / police / legislature です。");
+                default -> throw new State.Rejected("プロット種別は jail / courthouse / police / legislature / religious です。");
             };
             government.setPlot(player, type);
             player.sendMessage("現在地のプロット種別を " + type.name().toLowerCase(Locale.ROOT) + " に設定しました。");
             return;
         }
         if (operation.equals("show")) {
-            player.sendMessage("現在地のプロット種別 " + government.plotType(player));
+            player.sendMessage("現在地のプロット種別 " + (religiousSites.registered(player) ? "religious" : government.plotType(player)));
             return;
         }
         switch (operation) {
             case "rent" -> rent(player, args);
+            case "religious" -> religiousSites.command(player, args);
             case "puppet" -> {
                 switch (action(args, 2)) {
                     case "create" -> territory.createPuppet(player, argument(args, 3), knownPlayer(argument(args, 4)));
@@ -138,7 +153,7 @@ final class CivicCommands {
                     default -> throw new State.Rejected("使い方 /tel plot decentralization <create|add|remove|rebel>");
                 }
             }
-            default -> throw new State.Rejected("使い方 /tel plot <set|show|puppet|decentralization>");
+            default -> throw new State.Rejected("使い方 /tel plot <set|show|religious|rent|puppet|decentralization>");
         }
     }
 

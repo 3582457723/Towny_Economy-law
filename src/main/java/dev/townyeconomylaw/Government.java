@@ -90,16 +90,23 @@ final class Government {
         String plotKey = api.plotKey(location);
         require(plotKey != null, "Towny プロットが見つかりません。");
         state.transaction(undo -> {
-            for (Plot type : Plot.values()) {
-                String previous = plotPath(nation, type);
-                if (type != plot && plotKey.equals(data().getString(previous + ".plot"))) data().set(previous, null);
-            }
-            String oldCourt = prefix(nation) + ".plots.courtroom";
-            if (plot == Plot.COURTHOUSE || plotKey.equals(data().getString(oldCourt + ".plot"))) data().set(oldCourt, null);
+            clearPlotDesignation(nation, plotKey);
+            if (plot == Plot.COURTHOUSE) data().set(prefix(nation) + ".plots.courtroom", null);
+            data().set(ReligiousSites.entry(plotKey), null);
             String entry = prefix(nation) + ".plot-types." + plotKey;
             data().set(entry, plot.name().toLowerCase(Locale.ROOT));
             saveLocation(plotPath(nation, plot), location, plotKey);
         });
+    }
+
+    void clearPlotDesignation(Integrations.Nation nation, String plotKey) {
+        for (Plot type : Plot.values()) {
+            String previous = plotPath(nation, type);
+            if (plotKey.equals(data().getString(previous + ".plot"))) data().set(previous, null);
+        }
+        String oldCourt = prefix(nation) + ".plots.courtroom";
+        if (plotKey.equals(data().getString(oldCourt + ".plot"))) data().set(oldCourt, null);
+        data().set(prefix(nation) + ".plot-types." + plotKey, null);
     }
 
     String plotType(Player player) {

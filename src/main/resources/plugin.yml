@@ -1,5 +1,5 @@
 name: TownyEconomyLaw
-version: 1.0.0
+version: 1.1.0
 main: dev.townyeconomylaw.TownyEconomyLaw
 api-version: '1.21.11'
 depend: [Towny, Vault]
@@ -40,4 +40,10 @@ permissions:
     default: true
   townyeconomylaw.jail.override:
     description: 管理者による緊急釈放
+    default: op
+  townyeconomylaw.lockdown.bypass:
+    description: ロックダウン中の越境許可
+    default: op
+  townyeconomylaw.illness.manage:
+    description: ゲーム内の病気を管理
     default: op
